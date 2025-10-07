@@ -49,9 +49,9 @@ def post_tweet(t: TweetIn):
     value = json.dumps(tweet).encode("utf-8")
 
     try:
-        # Enqueue the record to the client’s buffer
+        # Enqueue the message to the client’s buffer for this topic.
         producer.produce(TOPIC_NAME, key=key, value=value)
-        # 
+        # Send all buffered messages to Kafka for this topic. At most block for 5 seconds.
         producer.flush(5)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to publish: {e}")

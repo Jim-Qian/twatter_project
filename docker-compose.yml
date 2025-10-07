@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
@@ -17,11 +16,13 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
 
   producer-api:
     build: ./producer-api
@@ -38,13 +39,10 @@ services:
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       TOPIC_TWEETS: twatter.tweets
-      DB_PATH: ./db:/data
+      DB_PATH: /data/twatter.sqlite
     ports:
       - "8001:8001"
     volumes:
-      - db_data:/data
+      - ./db:/data
     depends_on:
       - kafka
-
-volumes:
-  db_data:

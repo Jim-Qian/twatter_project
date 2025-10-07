@@ -97,6 +97,8 @@ class TweetOut(BaseModel):
 # Fast API endpoints
 app = FastAPI(title="twatter-consumer", lifespan=lifespan)
 
+# limit's default is 20; [1, 200] is the range.
+# It returns limit amount of tweets ordered by Tweets' ts: from newest to oldest.
 @app.get("/feed", response_model=List[TweetOut])
 def feed(limit: int = Query(20, ge=1, le=200), author: str | None = None):
     try:
