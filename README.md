@@ -12,10 +12,10 @@ In docker-compose.yml, in "consumer-worker", the "volume" value of "./db:/data" 
 
 ## Quick start
 ```
-1) docker compose down
-2) docker compose pull           # make sure kafka image downloads
-3) docker compose up -d --build  # start everything
-4) docker compose ps  // List all the ports running
+1) docker compose down           # Remove containers but not images.
+2) docker compose pull           # Download all the images defined in docker-compose.yml. But does not start their respective containers.
+3) docker compose up -d --build  # Start all containers.
+4) docker compose ps             # List all the ports running
 ```
 
 1) Post a tweet:
