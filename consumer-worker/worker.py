@@ -1,19 +1,25 @@
-import asyncio  # Runs the background Kafka consumption loop concurrently
+# import asyncio  # Runs the background Kafka consumption loop concurrently
 import json
 import os
 from contextlib import asynccontextmanager  # Used to hook into FastAPI’s lifecycle (start/stop)
+import threading
+from time import sleep
 from typing import List
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from confluent_kafka import Consumer, KafkaException
-from sqlalchemy import Column, Integer, String, Text, create_engine  # For defining and managing SQLite DB
+from sqlalchemy import Column, Integer, String, Text, create_engine, event  # For defining and managing SQLite DB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+
 
 BOOTSTRAP_SERVERS = os.getenv("BOOTSTRAP_SERVERS", "kafka:9092")
 TOPIC_NAME = os.getenv("TWEETS", "tweets")
 DB_PATH = os.getenv("DB_PATH", "/data/twatter.sqlite")
+
+stop_event = threading.Event()
 
 # The declarative base class for ORM models
 Base = declarative_base()
@@ -29,27 +35,30 @@ class Tweet(Base):
 # Creates the SQLite engine pointing at your volume.
 # Auto-creates the table if it doesn’t exist.
 # SessionLocal() gives a short-lived DB session (used inside with blocks).
-engine = create_engine(f"sqlite:///{DB_PATH}")
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False, "timeout": 1.0},
+    poolclass=NullPool,          # No pooling, new connection each time
+)
+
 Base.metadata.create_all(engine)
 SessionLocal = sessionmaker(bind=engine)
 
-consumer_conf = {
-    "bootstrap.servers": BOOTSTRAP_SERVERS,
-    "group.id": "twatter-consumer",
-    "auto.offset.reset": "earliest",
-    "enable.auto.commit": False,
-}
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_conn, _):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")     # readers don’t block writers
+    cur.execute("PRAGMA synchronous=NORMAL")   # faster fsyncs (fine for dev)
+    cur.execute("PRAGMA busy_timeout=1000")    # 1s instead of 5s
+    cur.close()
 
-kconsumer = Consumer(consumer_conf)
-kconsumer.subscribe([TOPIC_NAME])
 
-async def consume_loop():
-    while True:
+def consume_loop():
+    while not stop_event.is_set():  # Python for thread, only has .start() no .end()
         try:
-            # Runs forever, polling Kafka every second. If no message → waits briefly (avoids blocking other async tasks).
+            # Polls from Kafka. If nothing returned, block for 1 second.
             msg = kconsumer.poll(1.0)
             if msg is None:
-                await asyncio.sleep(0)
                 continue
             if msg.error():
                 raise KafkaException(msg.error())
@@ -70,22 +79,7 @@ async def consume_loop():
 
             kconsumer.commit(msg)
         except Exception:
-            await asyncio.sleep(0.5)
-
-# Runs your consume_loop() as a background task when the FastAPI app starts.
-# When the app shuts down, it cancels the loop gracefully and closes the Kafka consumer.
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    task = asyncio.create_task(consume_loop())
-    try:
-        yield
-    finally:
-        task.cancel()
-        try:
-            await task
-        except Exception:
-            pass
-        kconsumer.close()
+            sleep(0.5)
 
 class TweetOut(BaseModel):
     id: str
@@ -94,7 +88,36 @@ class TweetOut(BaseModel):
     ts: int
     in_reply_to: str | None = None
 
+
+# Runs your consume_loop() as a background task when the FastAPI app starts.
+# When the app shuts down, it cancels the loop gracefully and closes the Kafka consumer.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global kconsumer
+    # create consumer here (not at import time)
+    kconsumer = Consumer({
+        "bootstrap.servers": BOOTSTRAP_SERVERS,
+        "group.id": "twatter-consumer",
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+    })
+    kconsumer.subscribe([TOPIC_NAME])
+
+    # start background thread
+    t = threading.Thread(target=consume_loop, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:  # Runs when app shuts down. Stop thread and close consumer.
+        stop_event.set()
+        try:
+            kconsumer.close()
+        except Exception:
+            pass
+        t.join(timeout=2.0)
+
 # Fast API endpoints
+# Runs everything before yield in lifespan once at startup. Runs everything after once at shut down.
 app = FastAPI(title="twatter-consumer", lifespan=lifespan)
 
 # limit's default is 20; [1, 200] is the range.
@@ -124,3 +147,4 @@ def feed(limit: int = Query(20, ge=1, le=200), author: str | None = None):
 @app.get("/healthz")
 def health():
     return {"status": "ok"}
+
