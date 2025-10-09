@@ -1,6 +1,8 @@
-.PHONY: up down logs ps restart
+.PHONY: restart down logs ps
 
-up:
+restart:
+	docker compose down
+	docker compose pull
 	docker compose up -d --build
 
 down:
@@ -11,6 +13,3 @@ logs:
 
 ps:
 	docker compose ps
-
-restart:
-	docker compose down && docker compose up -d --build
